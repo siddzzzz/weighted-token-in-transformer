@@ -54,11 +54,29 @@ class SQuADDatasetLoader:
 
         system_prompt = "Answer the question based on the passage.\nQuestion: "
 
+        # Handle Hugging Face Dataset batch slicing (returns dict of lists)
+        if isinstance(examples, dict):
+            num_items = len(examples["question"])
+            item_list = []
+            for idx in range(num_items):
+                item_list.append({
+                    "question": examples["question"][idx],
+                    "context": examples["context"][idx],
+                    "answers": examples["answers"][idx]
+                })
+            examples = item_list
+
         for ex in examples:
             question = ex["question"]
             context = ex["context"]
-            answers = ex.get("answers", {}).get("text", [])
-            target_ans = answers[0] if len(answers) > 0 else "unanswerable"
+            answers = ex.get("answers", {})
+            if isinstance(answers, dict):
+                ans_text_list = answers.get("text", [])
+            elif isinstance(answers, list):
+                ans_text_list = answers
+            else:
+                ans_text_list = []
+            target_ans = ans_text_list[0] if len(ans_text_list) > 0 else "unanswerable"
 
             # Tokenize sections
             sys_ids = self.tokenizer.encode(system_prompt)

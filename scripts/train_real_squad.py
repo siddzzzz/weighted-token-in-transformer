@@ -24,9 +24,11 @@ def train_real_squad(args):
     loader = SQuADDatasetLoader(question_weight=args.question_weight, max_seq_len=args.max_seq_len)
     raw_train_dataset = loader.load_squad_dataset(split="train")
     
+    vocab_size = len(loader.tokenizer)
+
     if args.model_type == "autonomous":
         model = AutonomousWeightedTransformerDecoder(
-            vocab_size=50257,
+            vocab_size=vocab_size,
             d_model=args.d_model,
             num_heads=args.num_heads,
             num_layers=args.num_layers,
@@ -36,7 +38,7 @@ def train_real_squad(args):
         ).to(device)
     else:
         model = WeightedTransformerDecoder(
-            vocab_size=50257,
+            vocab_size=vocab_size,
             d_model=args.d_model,
             num_heads=args.num_heads,
             num_layers=args.num_layers,
@@ -66,9 +68,7 @@ def train_real_squad(args):
                 logits, _ = model(input_ids, token_weights=token_weights, entrypoint=args.mode)
 
             # Reshape logits and targets for CrossEntropy
-            # logits: [B, N, V] -> [B*N, V]
-            # targets: [B, N] -> [B*N]
-            loss = criterion(logits.view(-1, 50257), target_ids.view(-1))
+            loss = criterion(logits.view(-1, vocab_size), target_ids.view(-1))
 
             optimizer.zero_grad()
             loss.backward()
