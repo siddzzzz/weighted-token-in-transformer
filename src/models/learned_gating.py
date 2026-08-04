@@ -63,7 +63,8 @@ class AutonomousWeightedTransformerDecoder(nn.Module):
         self,
         idx: torch.Tensor,
         custom_weights: Optional[torch.Tensor] = None,
-        use_autonomous_gating: bool = True
+        use_autonomous_gating: bool = True,
+        output_attentions: bool = False
     ) -> Tuple[torch.Tensor, List[torch.Tensor], torch.Tensor]:
         B, N = idx.shape
         device = idx.device
@@ -82,7 +83,8 @@ class AutonomousWeightedTransformerDecoder(nn.Module):
         layer_attn_weights = []
         for layer in self.layers:
             x, weights = layer(x, token_weights=token_weights, causal=True, entrypoint="logit_bias")
-            layer_attn_weights.append(weights)
+            if output_attentions:
+                layer_attn_weights.append(weights)
 
         x = self.ln_f(x)
         logits = self.head(x)

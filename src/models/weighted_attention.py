@@ -140,7 +140,8 @@ class WeightedTransformerDecoder(nn.Module):
         self,
         idx: torch.Tensor,
         token_weights: Optional[torch.Tensor] = None,
-        entrypoint: str = "baseline"
+        entrypoint: str = "baseline",
+        output_attentions: bool = False
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         B, N = idx.shape
         device = idx.device
@@ -152,7 +153,8 @@ class WeightedTransformerDecoder(nn.Module):
         layer_attn_weights = []
         for layer in self.layers:
             x, weights = layer(x, token_weights=token_weights, causal=True, entrypoint=entrypoint)
-            layer_attn_weights.append(weights)
+            if output_attentions:
+                layer_attn_weights.append(weights)
 
         x = self.ln_f(x)
         logits = self.head(x)

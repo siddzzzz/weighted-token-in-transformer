@@ -49,10 +49,14 @@ def train_real_squad(args):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     criterion = nn.CrossEntropyLoss(ignore_index=loader.tokenizer.pad_token_id)
+    scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
 
     num_samples = len(raw_train_dataset)
     steps_per_epoch = min(num_samples // args.batch_size, args.max_steps_per_epoch)
 
+    accum_steps = getattr(args, 'gradient_accumulation_steps', 1)
+    optimizer.zero_grad()
+    
     model.train()
     for epoch in range(args.epochs):
         print(f"\n--- Epoch {epoch+1}/{args.epochs} ---")
@@ -62,24 +66,31 @@ def train_real_squad(args):
             batch_examples = raw_train_dataset[i * args.batch_size : (i + 1) * args.batch_size]
             input_ids, token_weights, target_ids = loader.prepare_batch(batch_examples, device=device)
 
-            if args.model_type == "autonomous":
-                logits, _, pred_weights = model(input_ids, use_autonomous_gating=True)
-            else:
-                logits, _ = model(input_ids, token_weights=token_weights, entrypoint=args.mode)
+            with torch.cuda.amp.autocast(enabled=(device == "cuda")):
+                if args.model_type == "autonomous":
+                    logits, _, pred_weights = model(input_ids, use_autonomous_gating=True, output_attentions=False)
+                else:
+                    logits, _ = model(input_ids, token_weights=token_weights, entrypoint=args.mode, output_attentions=False)
 
-            # Reshape logits and targets for CrossEntropy
-            loss = criterion(logits.view(-1, vocab_size), target_ids.view(-1))
+                loss = criterion(logits.view(-1, vocab_size), target_ids.view(-1))
+                loss = loss / accum_steps
 
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            scaler.scale(loss).backward()
 
-            epoch_loss += loss.item()
+            if (i + 1) % accum_steps == 0 or (i + 1) == steps_per_epoch:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
+            epoch_loss += loss.item() * accum_steps
 
             if (i + 1) % args.log_interval == 0 or (i + 1) == steps_per_epoch:
                 avg_l = epoch_loss / (i + 1)
-                print(f"Step {i+1:4d}/{steps_per_epoch} | Batch Loss: {loss.item():.4f} | Avg Loss: {avg_l:.4f}")
+                print(f"Step {i+1:4d}/{steps_per_epoch} | Batch Loss: {loss.item() * accum_steps:.4f} | Avg Loss: {avg_l:.4f}")
+                if device == "cuda":
+                    torch.cuda.empty_cache()
 
     results_dir = os.path.join(BASE_DIR, "results")
     os.makedirs(results_dir, exist_ok=True)
@@ -89,15 +100,16 @@ def train_real_squad(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Weighted Token Transformer on SQuAD v2.0")
-    parser.add_argument("--model_type", type=str, default="autonomous", choices=["autonomous", "explicit"], help="Model type: autonomous (learned gating) or explicit")
+    parser.add_argument("--model_type", type=str, default="autonomous", choices=["autonomous", "explicit"], help="Model type: autonomous or explicit")
     parser.add_argument("--mode", type=str, default="logit_bias", choices=["baseline", "logit_bias", "k_scale", "v_scale", "combo"], help="Token weight entrypoint")
     parser.add_argument("--d_model", type=int, default=256, help="Embedding dimension")
     parser.add_argument("--num_heads", type=int, default=8, help="Number of attention heads")
     parser.add_argument("--num_layers", type=int, default=4, help="Number of transformer layers")
-    parser.add_argument("--max_seq_len", type=int, default=1024, help="Maximum sequence length")
+    parser.add_argument("--max_seq_len", type=int, default=256, help="Maximum sequence length")
     parser.add_argument("--question_weight", type=float, default=3.0, help="Weight assigned to question tokens")
     parser.add_argument("--epochs", type=int, default=3, help="Number of epochs")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=2, help="Micro batch size")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Gradient accumulation steps")
     parser.add_argument("--max_steps_per_epoch", type=int, default=500, help="Max steps per epoch")
     parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability")
