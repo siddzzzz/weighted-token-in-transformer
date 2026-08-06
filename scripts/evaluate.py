@@ -27,6 +27,21 @@ def evaluate_synthetic_benchmarks(args):
         max_seq_len=2048
     ).to(device)
 
+    # Check and load trained model checkpoint if available
+    checkpoint_path = args.checkpoint
+    if checkpoint_path is None:
+        default_ckpt = os.path.join(BASE_DIR, "results", "autonomous_synthetic_model.pt")
+        if os.path.exists(default_ckpt):
+            checkpoint_path = default_ckpt
+
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"--> Loading trained model checkpoint from: {checkpoint_path}")
+        state_dict = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        print("--> [Warning] No trained checkpoint found. Evaluating untrained random model!")
+
+    model.eval()
     dataset = SyntheticNeedleDataset(vocab_size=1000)
     entrypoints = ["baseline", "logit_bias", "v_scale", "k_scale", "combo"]
     seq_lengths = [64, 128, 256, 512, 1024]
@@ -46,7 +61,7 @@ def evaluate_synthetic_benchmarks(args):
                 tokens, weights, targets = tokens.to(device), weights.to(device), targets.to(device)
 
                 with torch.no_grad():
-                    logits, layer_attn = model(tokens, token_weights=weights if ep != "baseline" else None, entrypoint=ep)
+                    logits, layer_attn = model(tokens, token_weights=weights if ep != "baseline" else None, entrypoint=ep, output_attentions=True)
                     predictions = logits[:, -1, :].argmax(dim=-1)
                     acc = (predictions == targets).float().mean().item() * 100.0
 
@@ -82,6 +97,7 @@ if __name__ == "__main__":
     parser.add_argument("--target_weight", type=float, default=3.0, help="Weight assigned to target instruction")
     parser.add_argument("--total_trials", type=int, default=40, help="Total evaluation trials per length")
     parser.add_argument("--batch_size", type=int, default=10, help="Evaluation batch size")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to trained model checkpoint .pt file")
     parser.add_argument("--device", type=str, default=None, help="Device (cuda or cpu)")
     args = parser.parse_args()
 

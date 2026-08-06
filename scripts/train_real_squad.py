@@ -49,7 +49,12 @@ def train_real_squad(args):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     criterion = nn.CrossEntropyLoss(ignore_index=loader.tokenizer.pad_token_id)
-    scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
+    
+    # PyTorch 2.x AMP GradScaler
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
 
     num_samples = len(raw_train_dataset)
     steps_per_epoch = min(num_samples // args.batch_size, args.max_steps_per_epoch)
@@ -66,7 +71,9 @@ def train_real_squad(args):
             batch_examples = raw_train_dataset[i * args.batch_size : (i + 1) * args.batch_size]
             input_ids, token_weights, target_ids = loader.prepare_batch(batch_examples, device=device)
 
-            with torch.cuda.amp.autocast(enabled=(device == "cuda")):
+            # PyTorch 2.x AMP autocast
+            autocast_cm = torch.amp.autocast("cuda", enabled=(device == "cuda")) if hasattr(torch, "amp") else torch.cuda.amp.autocast(enabled=(device == "cuda"))
+            with autocast_cm:
                 if args.model_type == "autonomous":
                     logits, _, pred_weights = model(input_ids, use_autonomous_gating=True, output_attentions=False)
                 else:
