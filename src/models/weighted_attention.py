@@ -135,6 +135,8 @@ class WeightedTransformerDecoder(nn.Module):
         ])
         self.ln_f = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, vocab_size, bias=False)
+        # Weight Tying (GPT-2 / Llama standard)
+        self.head.weight = self.tok_emb.weight
 
     def forward(
         self,

@@ -68,27 +68,27 @@ def evaluate_chinchilla(args):
     else:
         print(f"--> [Warning] Checkpoint not found at {checkpoint_path}! Evaluating initialized model.")
 
-    model.eval()
-    criterion = nn.CrossEntropyLoss(ignore_index=loader.tokenizer.pad_token_id)
+    pad_id = loader.tokenizer.pad_token_id if loader.tokenizer.pad_token_id is not None else 50256
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
 
-    num_eval_samples = min(len(val_dataset), args.max_eval_samples)
+    valid_val_lines = [ex["text"].strip() for ex in val_dataset if isinstance(ex, dict) and "text" in ex and len(ex["text"].strip()) > 5]
+    num_eval_samples = min(len(valid_val_lines), args.max_eval_samples)
     batch_size = args.batch_size
-    num_batches = num_eval_samples // (batch_size * 2)
+    num_batches = num_eval_samples // batch_size
 
     total_loss = 0.0
     heading_attn_masses = []
     learned_weights = []
 
-    print(f"\nEvaluating on {num_eval_samples} WikiText-103 validation text lines ...")
+    print(f"\nEvaluating on {num_eval_samples} valid WikiText-103 validation text lines ...")
 
     with torch.no_grad():
         for b in range(num_batches):
-            batch_slice = val_dataset[b * batch_size : (b + 1) * batch_size]
-            text_lines = [ex["text"] for ex in batch_slice if isinstance(ex, dict) and "text" in ex]
-            if not text_lines:
+            batch_lines = valid_val_lines[b * batch_size : (b + 1) * batch_size]
+            if not batch_lines:
                 continue
 
-            input_ids, token_weights, target_ids = loader.prepare_batch(text_lines, device=device)
+            input_ids, token_weights, target_ids = loader.prepare_batch(batch_lines, device=device)
 
             if args.model_type == "autonomous":
                 logits, layer_attn, pred_weights = model(input_ids, use_autonomous_gating=True, output_attentions=True)

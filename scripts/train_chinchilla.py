@@ -87,12 +87,19 @@ def train_chinchilla(args):
             dropout=args.dropout
         ).to(device)
 
-    # Print total trainable parameters
+    # Print total and non-embedding parameters (Chinchilla convention)
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"--> Total Model Parameters: {total_params:,} ({total_params/1e6:.2f} Million)")
+    non_emb_params = sum(p.numel() for name, p in model.named_parameters() if "tok_emb" not in name and "pos_emb" not in name)
+    print(f"--> Non-Embedding Transformer Layer Parameters (Chinchilla N): {non_emb_params:,} ({non_emb_params/1e6:.2f} Million)")
+    print(f"--> Total Model Parameters (with Tied Vocab Embeddings): {total_params:,} ({total_params/1e6:.2f} Million)")
+
+    print("\nFiltering WikiText-103 text lines...")
+    valid_text_lines = [ex["text"].strip() for ex in raw_train_dataset if isinstance(ex, dict) and "text" in ex and len(ex["text"].strip()) > 5]
+    print(f"--> Loaded {len(valid_text_lines):,} valid non-empty WikiText text lines.")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
-    criterion = nn.CrossEntropyLoss(ignore_index=loader.tokenizer.pad_token_id)
+    pad_id = loader.tokenizer.pad_token_id if loader.tokenizer.pad_token_id is not None else 50256
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
     
     # AMP Mixed Precision Scaler
     if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
@@ -100,8 +107,8 @@ def train_chinchilla(args):
     else:
         scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
 
-    num_samples = len(raw_train_dataset)
-    steps_per_epoch = min(num_samples // (args.batch_size * 4), args.max_steps_per_epoch)
+    num_samples = len(valid_text_lines)
+    steps_per_epoch = min(num_samples // args.batch_size, args.max_steps_per_epoch)
 
     # Cosine Annealing LR Scheduler
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * steps_per_epoch, eta_min=1e-5)
@@ -115,13 +122,11 @@ def train_chinchilla(args):
         epoch_loss = 0.0
 
         for i in range(steps_per_epoch):
-            batch_slice = raw_train_dataset[i * args.batch_size : (i + 1) * args.batch_size]
-            text_lines = [ex["text"] for ex in batch_slice if isinstance(ex, dict) and "text" in ex]
-
-            if not text_lines:
+            batch_lines = valid_text_lines[i * args.batch_size : (i + 1) * args.batch_size]
+            if not batch_lines:
                 continue
 
-            input_ids, token_weights, target_ids = loader.prepare_batch(text_lines, device=device)
+            input_ids, token_weights, target_ids = loader.prepare_batch(batch_lines, device=device)
 
             autocast_cm = torch.amp.autocast("cuda", enabled=(device == "cuda")) if hasattr(torch, "amp") else torch.cuda.amp.autocast(enabled=(device == "cuda"))
             with autocast_cm:
